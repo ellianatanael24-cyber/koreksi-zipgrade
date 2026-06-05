@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>OMR LJK Scanner</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+
+<script async
+src="https://docs.opencv.org/4.x/opencv.js"
+onload="opencvReady=true;">
+</script>
+
+<style>
+
+video,
+canvas{
+width:100%;
+border-radius:12px;
+}
+
+.overlay{
+position:absolute;
+top:0;
+left:0;
+width:100%;
+height:100%;
+pointer-events:none;
+}
+
+.guide{
+position:absolute;
+border:3px dashed lime;
+width:80%;
+height:80%;
+left:10%;
+top:10%;
+}
+
+</style>
+
+</head>
+<body class="bg-gray-100">
+
+<div class="max-w-6xl mx-auto p-4">
+
+<h1 class="text-3xl font-bold text-center mb-4">
+LJK Scanner OpenCV
+</h1>
+
+<div class="bg-white rounded-xl shadow p-4 mb-4">
+
+<div class="grid md:grid-cols-2 gap-4">
+
+<div>
+
+<label class="font-semibold">
+Jumlah Soal
+</label>
+
+<select
+id="jumlahSoal"
+class="w-full border rounded p-2">
+
+<option>10</option>
+<option>20</option>
+<option>30</option>
+<option>40</option>
+<option selected>50</option>
+
+</select>
+
+</div>
+
+<div>
+
+<label class="font-semibold">
+Kunci Jawaban
+</label>
+
+<textarea
+id="kunciJawaban"
+rows="3"
+placeholder="Contoh: A,B,C,D,E..."
+class="w-full border rounded p-2"></textarea>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="bg-white rounded-xl shadow p-4 mb-4">
+
+<div class="relative">
+
+<video
+id="video"
+autoplay
+playsinline
+muted></video>
+
+<canvas
+id="canvas"
+class="hidden"></canvas>
+
+<div class="overlay">
+
+<div class="guide"></div>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="flex flex-wrap gap-2 mb-4">
+
+<button
+id="btnCamera"
+class="bg-blue-600 text-white px-4 py-2 rounded">
+
+Buka Kamera
+
+</button>
+
+<button
+id="btnSwitch"
+class="bg-green-600 text-white px-4 py-2 rounded">
+
+Ganti Kamera
+
+</button>
+
+<button
+id="btnCapture"
+class="bg-purple-600 text-white px-4 py-2 rounded">
+
+Capture
+
+</button>
+
+<button
+id="btnReset"
+class="bg-red-600 text-white px-4 py-2 rounded">
+
+Reset
+
+</button>
+
+</div>
+
+<div class="bg-white rounded-xl shadow p-4">
+
+<h2 class="font-bold text-xl mb-3">
+Hasil Koreksi
+</h2>
+
+<div class="grid grid-cols-2 gap-3">
+
+<div class="bg-green-100 p-3 rounded">
+
+<div class="text-sm">
+Benar
+</div>
+
+<div
+id="benar"
+class="text-3xl font-bold">
+
+0
+
+</div>
+
+</div>
+
+<div class="bg-red-100 p-3 rounded">
+
+<div class="text-sm">
+Salah
+</div>
+
+<div
+id="salah"
+class="text-3xl font-bold">
+
+0
+
+</div>
+
+</div>
+
+</div>
+
+<div class="mt-4">
+
+<h3 class="font-semibold">
+Detail Salah
+</h3>
+
+<div
+id="detailSalah"
+class="text-sm mt-2"></div>
+
+</div>
+
+</div>
+
+</div>
+
+<script>
+
+let stream=null;
+let facingMode='environment';
+
+let video=
+document.getElementById('video');
+
+let canvas=
+document.getElementById('canvas');
+
+let ctx=
+canvas.getContext('2d');
+
+let opencvReady=false;
+
+async function startCamera(){
+
+try{
+
+if(stream){
+stream.getTracks().forEach(t=>t.stop());
+}
+
+stream = await navigator.mediaDevices.getUserMedia({
+
+video:{
+facingMode:facingMode
+}
+
+});
+
+video.srcObject = stream;
+
+alert("Kamera berhasil dibuka");
+
+}catch(err){
+
+alert(
+"Kamera gagal: " +
+err.message
+);
+
+console.error(err);
+
+}
+
+}
+
+
+document
+.getElementById('btnCamera')
+.onclick=startCamera;
+
+document
+.getElementById('btnSwitch')
+.onclick=async()=>{
+
+facingMode=
+facingMode==='environment'
+?
+'user'
+:
+'environment';
+
+await startCamera();
+
+};
+
+document
+.getElementById('btnReset')
+.onclick=()=>{
+
+document
+.getElementById('benar')
+.innerText=0;
+
+document
+.getElementById('salah')
+.innerText=0;
+
+document
+.getElementById('detailSalah')
+.innerHTML='';
+
+};
+
+function drawFrame(){
+
+if(video.readyState===4){
+
+canvas.width=
+video.videoWidth;
+
+canvas.height=
+video.videoHeight;
+
+ctx.drawImage(
+video,
+0,
+0
+);
+
+}
+
+requestAnimationFrame(
+drawFrame
+);
+
+}
+
+drawFrame();
+
+
+/* =====================================
+   PART 2
+   DETEKSI KERTAS LJK
+===================================== */
+
+let lastWarped = null;
+
+function orderPoints(pts){
+
+    pts.sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+
+    let tl=pts[0];
+    let br=pts[3];
+
+    let remain=[pts[1],pts[2]];
+
+    let tr=
+        remain[0].x > remain[1].x
+        ? remain[0]
+        : remain[1];
+
+    let bl=
+        remain[0].x > remain[1].x
+        ? remain[1]
+        : remain[0];
+
+    return [tl,tr,br,bl];
+}
+
+function detectDocument(){
+
+    if(!opencvReady) return;
+
+    if(video.readyState!==4) return;
+
+    let src =
+        cv.imread(canvas);
+
+    let gray =
+        new cv.Mat();
+
+    let blur =
+        new cv.Mat();
+
+    let edge =
+        new cv.Mat();
+
+    cv.cvtColor(
+        src,
+        gray,
+        cv.COLOR_RGBA2GRAY
+    );
+
+    cv.GaussianBlur(
+        gray,
+        blur,
+        new cv.Size(5,5),
+        0
+    );
+
+    cv.Canny(
+        blur,
+        edge,
+        75,
+        200
+    );
+
+    let contours =
+        new cv.MatVector();
+
+    let hierarchy =
+        new cv.Mat();
+
+    cv.findContours(
+        edge,
+        contours,
+        hierarchy,
+        cv.RETR_EXTERNAL,
+        cv.CHAIN_APPROX_SIMPLE
+    );
+
+    let maxArea = 0;
+    let bestContour = null;
+
+    for(let i=0;i<contours.size();i++){
+
+        let cnt=
+            contours.get(i);
+
+        let area=
+            cv.contourArea(cnt);
+
+        if(area<50000)
+            continue;
+
+        let peri=
+            cv.arcLength(
+                cnt,
+                true
+            );
+
+        let approx=
+            new cv.Mat();
+
+        cv.approxPolyDP(
+            cnt,
+            approx,
+            0.02*peri,
+            true
+        );
+
+        if(
+            approx.rows===4 &&
+            area>maxArea
+        ){
+            maxArea=area;
+            bestContour=approx;
+        }
+    }
+
+    if(bestContour){
+
+        let pts=[];
+
+        for(let i=0;i<4;i++){
+
+            pts.push({
+
+                x:
+                bestContour
+                .intPtr(i,0)[0],
+
+                y:
+                bestContour
+                .intPtr(i,0)[1]
+
+            });
+        }
+
+        pts=
+            orderPoints(pts);
+
+        ctx.strokeStyle='lime';
+        ctx.lineWidth=5;
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            pts[0].x,
+            pts[0].y
+        );
+
+        for(let i=1;i<4;i++){
+
+            ctx.lineTo(
+                pts[i].x,
+                pts[i].y
+            );
+        }
+
+        ctx.closePath();
+        ctx.stroke();
+
+        document
+            .querySelector('.guide')
+            .style.borderColor='lime';
+
+    }else{
+
+        document
+            .querySelector('.guide')
+            .style.borderColor='orange';
+    }
+
+    src.delete();
+    gray.delete();
+    blur.delete();
+    edge.delete();
+    contours.delete();
+    hierarchy.delete();
+
+    requestAnimationFrame(
+        detectDocument
+    );
+}
+
+setTimeout(()=>{
+    detectDocument();
+},2000);
+
+
+/* =====================================
+   CAPTURE + WARP
+===================================== */
+
+function captureLJK(){
+
+    if(!opencvReady){
+
+        alert(
+            'OpenCV belum siap'
+        );
+
+        return;
+    }
+
+    let src=
+        cv.imread(canvas);
+
+    let gray=
+        new cv.Mat();
+
+    let blur=
+        new cv.Mat();
+
+    let edge=
+        new cv.Mat();
+
+    cv.cvtColor(
+        src,
+        gray,
+        cv.COLOR_RGBA2GRAY
+    );
+
+    cv.GaussianBlur(
+        gray,
+        blur,
+        new cv.Size(5,5),
+        0
+    );
+
+    cv.Canny(
+        blur,
+        edge,
+        75,
+        200
+    );
+
+    let contours=
+        new cv.MatVector();
+
+    let hierarchy=
+        new cv.Mat();
+
+    cv.findContours(
+        edge,
+        contours,
+        hierarchy,
+        cv.RETR_EXTERNAL,
+        cv.CHAIN_APPROX_SIMPLE
+    );
+
+    let bestContour=null;
+    let maxArea=0;
+
+    for(let i=0;i<contours.size();i++){
+
+        let cnt=
+            contours.get(i);
+
+        let area=
+            cv.contourArea(cnt);
+
+        if(area<50000)
+            continue;
+
+        let peri=
+            cv.arcLength(
+                cnt,
+                true
+            );
+
+        let approx=
+            new cv.Mat();
+
+        cv.approxPolyDP(
+            cnt,
+            approx,
+            0.02*peri,
+            true
+        );
+
+        if(
+            approx.rows===4 &&
+            area>maxArea
+        ){
+
+            maxArea=area;
+            bestContour=approx;
+        }
+    }
+
+    if(!bestContour){
+
+        alert(
+            'LJK tidak ditemukan'
+        );
+
+        return;
+    }
+
+    let pts=[];
+
+    for(let i=0;i<4;i++){
+
+        pts.push({
+
+            x:
+            bestContour
+            .intPtr(i,0)[0],
+
+            y:
+            bestContour
+            .intPtr(i,0)[1]
+
+        });
+    }
+
+    pts=
+        orderPoints(pts);
+
+    let srcTri=
+        cv.matFromArray(
+            4,
+            1,
+            cv.CV_32FC2,
+            [
+
+            pts[0].x,
+            pts[0].y,
+
+            pts[1].x,
+            pts[1].y,
+
+            pts[2].x,
+            pts[2].y,
+
+            pts[3].x,
+            pts[3].y
+
+            ]
+        );
+
+    let dstTri=
+        cv.matFromArray(
+            4,
+            1,
+            cv.CV_32FC2,
+            [
+
+            0,0,
+            1000,0,
+            1000,1400,
+            0,1400
+
+            ]
+        );
+
+    let M=
+        cv.getPerspectiveTransform(
+            srcTri,
+            dstTri
+        );
+
+    let warped=
+        new cv.Mat();
+
+    cv.warpPerspective(
+
+        src,
+
+        warped,
+
+        M,
+
+        new cv.Size(
+            1000,
+            1400
+        )
+
+    );
+
+    lastWarped=warped;
+
+    alert(
+        'LJK berhasil di-capture'
+    );
+
+    src.delete();
+    gray.delete();
+    blur.delete();
+    edge.delete();
+    contours.delete();
+    hierarchy.delete();
+}
+
+document
+.getElementById(
+    'btnCapture'
+)
+.onclick=
+captureLJK;
+
+
+
+/* =====================================
+   PART 3
+   OMR + KOREKSI
+===================================== */
+
+function parseKunci(){
+
+    let txt =
+        document
+        .getElementById(
+            "kunciJawaban"
+        )
+        .value
+        .toUpperCase()
+        .trim();
+
+    if(!txt) return [];
+
+    return txt
+        .split(",")
+        .map(x=>x.trim());
+}
+
+function thresholdImage(src){
+
+    let gray =
+        new cv.Mat();
+
+    let thresh =
+        new cv.Mat();
+
+    cv.cvtColor(
+        src,
+        gray,
+        cv.COLOR_RGBA2GRAY
+    );
+
+    cv.adaptiveThreshold(
+        gray,
+        thresh,
+        255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv.THRESH_BINARY_INV,
+        21,
+        10
+    );
+
+    gray.delete();
+
+    return thresh;
+}
+
+/* =====================================
+   TEMPLATE POSISI BUBBLE
+===================================== */
+
+function getBubblePosition(
+    questionIndex,
+    choiceIndex
+){
+
+    const startX = 140;
+    const startY = 180;
+
+    const colWidth = 165;
+    const rowHeight = 115;
+
+    const bubbleGap = 22;
+
+    let q = questionIndex;
+
+    let block =
+        Math.floor(q/10);
+
+    let row =
+        q % 10;
+
+    let x =
+        startX +
+        block * colWidth +
+        choiceIndex * bubbleGap;
+
+    let y =
+        startY +
+        row * rowHeight;
+
+    return {x,y};
+}
+
+/* =====================================
+   BACA JAWABAN
+===================================== */
+
+function detectAnswers(){
+
+    if(!lastWarped){
+
+        alert(
+            "Capture LJK terlebih dahulu"
+        );
+
+        return;
+    }
+
+    let totalSoal =
+        parseInt(
+            document
+            .getElementById(
+                "jumlahSoal"
+            )
+            .value
+        );
+
+    let thresh =
+        thresholdImage(
+            lastWarped
+        );
+
+    let hasil=[];
+
+    const bubbleSize=18;
+
+    for(
+        let q=0;
+        q<totalSoal;
+        q++
+    ){
+
+        let density=[];
+
+        for(
+            let c=0;
+            c<5;
+            c++
+        ){
+
+            let p=
+                getBubblePosition(
+                    q,
+                    c
+                );
+
+            let rect=
+                new cv.Rect(
+                    p.x,
+                    p.y,
+                    bubbleSize,
+                    bubbleSize
+                );
+
+            let roi=
+                thresh.roi(
+                    rect
+                );
+
+            let count=
+                cv.countNonZero(
+                    roi
+                );
+
+            density.push(
+                count
+            );
+
+            roi.delete();
+        }
+
+        let max=
+            Math.max(
+                ...density
+            );
+
+        let idx=
+            density.indexOf(
+                max
+            );
+
+        let sorted=
+            [...density]
+            .sort(
+                (a,b)=>b-a
+            );
+
+        let answer="";
+
+        if(max<20){
+
+            answer="";
+
+        }else{
+
+            if(
+                sorted[0]-
+                sorted[1]
+                <10
+            ){
+
+                answer="MULTI";
+
+            }else{
+
+                answer=
+                    ["A","B","C","D","E"]
+                    [idx];
+            }
+        }
+
+        hasil.push(
+            answer
+        );
+    }
+
+    thresh.delete();
+
+    return hasil;
+}
+
+/* =====================================
+   KOREKSI
+===================================== */
+
+function checkAnswers(){
+
+    let kunci=
+        parseKunci();
+
+    if(
+        kunci.length===0
+    ){
+
+        alert(
+            "Masukkan kunci jawaban"
+        );
+
+        return;
+    }
+
+    let siswa=
+        detectAnswers();
+
+    let benar=0;
+    let salah=0;
+
+    let detail=[];
+
+    for(
+        let i=0;
+        i<kunci.length;
+        i++
+    ){
+
+        let k=
+            kunci[i];
+
+        let j=
+            siswa[i] || "";
+
+        if(
+            j===k
+        ){
+
+            benar++;
+
+        }else{
+
+            salah++;
+
+            detail.push(
+
+                "No "+
+                (i+1)+
+                " : "+
+                (j || "KOSONG")+
+                " (Kunci "+
+                k+
+                ")"
+
+            );
+        }
+    }
+
+    document
+    .getElementById(
+        "benar"
+    )
+    .innerText=
+    benar;
+
+    document
+    .getElementById(
+        "salah"
+    )
+    .innerText=
+    salah;
+
+    document
+    .getElementById(
+        "detailSalah"
+    )
+    .innerHTML=
+    detail.join("<br>");
+}
+
+/* =====================================
+   TOMBOL KOREKSI
+===================================== */
+
+const btnKoreksi=
+document.createElement(
+    "button"
+);
+
+btnKoreksi.innerText=
+"Koreksi";
+
+btnKoreksi.className=
+"bg-amber-600 text-white px-4 py-2 rounded";
+
+document
+.querySelector(
+    ".flex.flex-wrap"
+)
+.appendChild(
+    btnKoreksi
+);
+
+btnKoreksi.onclick=
+checkAnswers;
+
+</script>
+
+</body>
+</html>
